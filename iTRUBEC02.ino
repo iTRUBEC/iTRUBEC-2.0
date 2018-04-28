@@ -1,5 +1,7 @@
 long lastJob1s = 0, lastJob5s = 0, lastJob30s = 0, lastJob1min = 0;
-float maxtemp = 45, temp = 0;
+float maxtemp = 49, temp = 0, mintemp = 0, humidity = 0;
+String record = "";
+byte tsec, tmin, thour, tdayOfWeek, tdayOfMonth, tmonth, tyear;
 
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
@@ -7,15 +9,20 @@ float maxtemp = 45, temp = 0;
 #include <NTPClient.h>
 #include <ArduinoOTA.h>
 #include <Wire.h>
-#include <Adafruit_Sensor.h>
+//#include <Adafruit_Sensor.h>
 #include <DHT.h>
 #include <DHT_U.h>
-#include <OneWire.h>
+//#include <OneWire.h>
 #include <DallasTemperature.h>
+//#include <SPI.h>
+#include <SD.h>
+
+File myFile;
+const int chipSelect = D2; // SD Card Reader CS
 
 //Preferovaná WiFi
-const char* ssid = "HOUSLEpracovna";
-const char* password = "guarneri";
+const char* ssid = "iTRUBEC";
+const char* password = "1234567890";
 
 // nastavení propojovacích pinů RTC modulu
 /*WeMos D1    vodič   RTC DS3231 modul
@@ -31,7 +38,7 @@ const char* password = "guarneri";
 // A UDP instance to let us send and receive packets over UDP
 WiFiUDP ntpUDP;
 
-//definice pro NTP klienta (název, poo-serverů, offset-s, ipdate-interval-s)
+//definice pro NTP klienta (název, pool-serverů, offset-s, ipdate-interval-s)
 NTPClient timeClient(ntpUDP, "europe.pool.ntp.org", 3600, 60000);
 
 // nastavení propojovacích pinů Bluetooth
@@ -39,29 +46,26 @@ NTPClient timeClient(ntpUDP, "europe.pool.ntp.org", 3600, 60000);
   -----------------------------------
   GND         seda    GND
   VCC 5 V     bila    VCC 5 V
-  D12/MISO/D6 fialova TXD
-  D1/MOSI/D7  modra   RXD
+  D0 RX       fialova TXD
+  D1 TX       modra   RXD
 */
-#define RX D7 //MOSI
-#define TX D6 //MISO
-// připojení knihovny SoftwareSerial
-#include <SoftwareSerial.h>
-// inicializace Bluetooth modulu z knihovny SoftwareSerial
-SoftwareSerial bluetooth(TX, RX);
+
+
 
 //Nastavení čidla DHT22
 /*WeMOs D1    vodič   DHT22 AOSONG
   -----------------------------------
   GND         seda    - (vpravo)
   VCC 5 V     bila    + (vlevo)
-  D8          hnědá   out (uprostřed)
+  D9          hnědá   out (uprostřed)
 */
-#define DHTtPIN D8
+#define DHTtPIN D9
 #define DHTtTYPE DHT22
-DHT_Unified dhtt(DHTtPIN, DHTtTYPE);
+DHT dht(DHTtPIN, DHTtTYPE);
+//DHT_Unified dhtt(DHTtPIN, DHTtTYPE);
 
 //Nastavení teplotních čidel DS18B20
-#define ONE_WIRE_BUS_PIN D5 // onewire pro čidla na D5
+#define ONE_WIRE_BUS_PIN D8 // onewire pro čidla na D5
 OneWire oneWire(ONE_WIRE_BUS_PIN);
 DallasTemperature sensors(&oneWire);
 DeviceAddress Probe01 = { 0x28, 0xFF, 0x13, 0x43, 0xC4, 0x17, 0x04, 0x3C };
@@ -82,10 +86,19 @@ float topeni = 0;
 
 void setup() {
   Serial.begin(9600);
-  Vypis("Bootuji");
+  Serial.println("Bootuji");
   Wire.begin();
   sensors.begin();
   timeClient.begin();
+  dht.begin();
+
+  Serial.print("Initializing SD card...");
+  if (!SD.begin(chipSelect)) {
+    Serial.println("SD Card initialization FAILED!");
+    //return;
+  } else {
+    Serial.println("SD Card initialization OK.");
+  }
 
   // nastavení přesnosti senzorů DS18B20 na 11 bitů (může být 9 - 12)
   sensors.setResolution(Probe01, 11);
@@ -95,10 +108,6 @@ void setup() {
 
   pinMode(relePIN, OUTPUT);
 
-  // zahájení komunikace s Bluetooth modulem rychlostí 9600 baud
-  bluetooth.begin(9600);
-  bluetooth.println("\niTRUBEC02 přes Bluetooth...");
-
   // Port defaults to 8266
   // ArduinoOTA.setPort(8266);
 
@@ -106,26 +115,24 @@ void setup() {
   ArduinoOTA.setHostname("iTRUBEC02");
 
   // No authentication by default
-  ArduinoOTA.setPassword((const char *)"amati");
+  ArduinoOTA.setPassword((const char *)"itubec");
 
   ArduinoOTA.onStart([]() {
-    Vypis("OTA aktualizace start");
+    Serial.println("OTA aktualizace start");
   });
   ArduinoOTA.onEnd([]() {
     Serial.println("\nOTA aktualizace konec");
   });
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
     Serial.printf("OTA postup aktualizace: %u%%\r", (progress / (total / 100)));
-    bluetooth.printf("OTA postup aktualizace: %u%%\r", (progress / (total / 100)));
   });
   ArduinoOTA.onError([](ota_error_t error) {
     Serial.printf("OTA aktualizace - Chyba [%u]: ", error);
-    bluetooth.printf("OTA aktualizace - Chyba [%u]: ", error);
-    if (error == OTA_AUTH_ERROR) Vypis("chyba autentizace");
-    else if (error == OTA_BEGIN_ERROR) Vypis("chyba iniciace");
-    else if (error == OTA_CONNECT_ERROR) Vypis("chyba pripojeni");
-    else if (error == OTA_RECEIVE_ERROR) Vypis("chyba prijmu");
-    else if (error == OTA_END_ERROR) Vypis("chyba ukonceni");
+    if (error == OTA_AUTH_ERROR) Serial.println("chyba autentizace");
+    else if (error == OTA_BEGIN_ERROR) Serial.println("chyba iniciace");
+    else if (error == OTA_CONNECT_ERROR) Serial.println("chyba pripojeni");
+    else if (error == OTA_RECEIVE_ERROR) Serial.println("chyba prijmu");
+    else if (error == OTA_END_ERROR) Serial.println("chyba ukonceni");
   });
   ArduinoOTA.begin();
 }
@@ -171,58 +178,48 @@ void displayTime() {
   // retrieve data from DS3231
   readDS3231time(&second, &minute, &hour, &dayOfWeek, &dayOfMonth, &month, &year);
   // send it to the serial monitor
-  Vypiss(String(hour, DEC));
+  Serial.print(String(hour, DEC));
   // convert the byte variable to a decimal number when displayed
-  Vypiss(":");
+  Serial.print(":");
   if (minute < 10) {
-    Vypiss("0");
+    Serial.print("0");
   }
-  Vypiss(String(minute, DEC));
-  Vypiss(":");
+  Serial.print(String(minute, DEC));
+  Serial.print(":");
   if (second < 10) {
-    Vypiss("0");
+    Serial.print("0");
   }
-  Vypiss(String(second, DEC));
-  Vypiss(" ");
-  Vypiss(String(dayOfMonth, DEC));
-  Vypiss(".");
-  Vypiss(String(month, DEC));
-  Vypiss(".");
-  Vypiss(String(year, DEC));
-  Vypiss(" Den v tydnu: ");
+  Serial.print(String(second, DEC));
+  Serial.print(" ");
+  Serial.print(String(dayOfMonth, DEC));
+  Serial.print(".");
+  Serial.print(String(month, DEC));
+  Serial.print(".");
+  Serial.print(String(year, DEC));
+  Serial.print(" Den v tydnu: ");
   switch (dayOfWeek) {
     case 1:
-      Vypis("Nedele");
+      Serial.println("Nedele");
       break;
     case 2:
-      Vypis("Pondeli");
+      Serial.println("Pondeli");
       break;
     case 3:
-      Vypis("Utery");
+      Serial.println("Utery");
       break;
     case 4:
-      Vypis("Streda");
+      Serial.println("Streda");
       break;
     case 5:
-      Vypis("Ctvrtek");
+      Serial.println("Ctvrtek");
       break;
     case 6:
-      Vypis("Patek");
+      Serial.println("Patek");
       break;
     case 7:
-      Vypis("Sobota");
+      Serial.println("Sobota");
       break;
   }
-}
-
-void Vypis(String kvypsani) {  //Vypíše parametr kvypsani na seriovou linku i na bluetooth
-  Serial.println(kvypsani);
-  bluetooth.println(kvypsani);
-}
-
-void Vypiss(String kvypsani) { //Vypíše parametr kvypsani na seriovou linku i na bluetooth (bez odradkovani)
-  Serial.print(kvypsani);
-  bluetooth.print(kvypsani);
 }
 
 void AktualizujRTC() { //Zjistí přes NTP aktuální čas a aktualizuje RTC modul
@@ -247,7 +244,7 @@ void AktualizujRTC() { //Zjistí přes NTP aktuální čas a aktualizuje RTC mod
   int RTCyear = (timeClient.getYear() - 2000);
   // DS3231      seconds, minutes hours, day, date, month, year
   setDS3231time(RTCseconds, RTCminutes, RTChours, RTCday, RTCdate, RTCmonth, RTCyear);
-  //Vypis("RTC cas aktualizovan pres NTP.");
+  //Serial.println("RTC cas aktualizovan pres NTP.");
 }
 
 int adjustDstEurope() //funkce na zohlednění česového posunu oproti UTC včetně případného letního času
@@ -269,139 +266,87 @@ int adjustDstEurope() //funkce na zohlednění česového posunu oproti UTC vče
 }
 
 void ZkusPripojitWifi() { //pokudí se připojit k WiFi a v případě úspěchu aktualizute RTC
-  Vypis("Pokousim se pripojit k WiFi...");
+  Serial.println("Pokousim se pripojit k WiFi...");
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
-  //Vypis("Pokus o pripojeni k WiFi....");
+  Serial.println("Pokus o pripojeni k WiFi....");
   delay(2500);
-  /*
-    if (WiFi.waitForConnectResult() != WL_CONNECTED) {
-    Vypis("Pripojeni k WiFi se nezdarilo! Zkusím se přípojit opět za minutu...");
-    } else {
-    Vypiss("Pripojeno k WiFi! IP adresa: ");
-    Vypis(WiFi.localIP().toString());
-    }
-  */
-}
 
-void BlueToothHandle() { //čtení a zápis BT linky
-  // proměnná pro ukládání dat z Bluetooth modulu
-  byte BluetoothData;
-  // kontrola Bluetooth komunikace, pokud je dostupná nová
-  // zpráva, tak nám tato funkce vrátí počet jejích znaků
-  if (bluetooth.available() > 0) {
-    // načtení prvního znaku ve frontě do proměnné
-    BluetoothData = bluetooth.read();
-    // dekódování přijatého znaku
-    switch (BluetoothData) {
-      // každý case obsahuje dekódování jednoho znaku
-      case '0':
-        // v případě přijetí znaku nuly vypneme
-        Vypis("Vypni....");
-        break;
-      case '1':
-        // v případě přijetí jedničky zapneme
-        Vypis("Zapni....");
-        break;
-      case 'a':
-        // v případě přejetí znaku 'a' vypíšeme
-        // čas od spuštění Arduina
-        Vypiss("Cas od spusteni Arduina: ");
-        Vypiss(String(millis() / 1000));
-        Vypis(" vterin.");
-        break;
-      case 'b':
-        // zde je ukázka načtení většího počtu informací,
-        // po přijetí znaku 'b' tedy postupně tiskneme
-        // další znaky poslané ve zprávě
-        Vypis("Nacitam zpravu: ");
-        BluetoothData = bluetooth.read();
-        // v této smyčce zůstáváme do té doby,
-        // dokud jsou nějaké znaky ve frontě
-        while (bluetooth.available() > 0) {
-          bluetooth.write(BluetoothData);
-          // krátká pauza mezi načítáním znaků
-          delay(10);
-          BluetoothData = bluetooth.read();
-        }
-        Vypis("\n");
-        break;
-      case '\r':
-        // přesun na začátek řádku - znak CR
-        break;
-      case '\n':
-        // odřádkování - znak LF
-        break;
-      default:
-        // v případě přijetí ostatních znaků vytiskneme informaci o neznámé zprávě
-        Vypis("Neznamy prikaz.");
-    }
+  if (WiFi.waitForConnectResult() != WL_CONNECTED) {
+    Serial.println("Pripojeni k WiFi se nezdarilo! Zkusím se přípojit opět za minutu...");
+  } else {
+    Serial.print("Pripojeno k WiFi! IP adresa: ");
+    Serial.println(WiFi.localIP().toString());
   }
 }
 
 void zjistiDHT22()
 {
   // Get temperature event and print its value.
-  sensors_event_t eventt;
-  dhtt.temperature().getEvent(&eventt);
-  if (isnan(eventt.temperature)) {
-    Vypis("Chyba cteni teploty z DHT22!");
+  //sensors_event_t eventt;
+  //dhtt.temperature().getEvent(&eventt);
+  float h = dht.readHumidity();
+  // Read temperature as Celsius (the default)
+  float t = dht.readTemperature();
+  //if (isnan(eventt.temperature)) {
+  //  Serial.println("Error reading temperature from DHT22!");
+  //}
+  if (isnan(h) || isnan(t)) {
+    Serial.println("Failed to read from DHT sensor!");
   }
-  delay(100);
   // Get humidity event and print its value.
-  sensors_event_t eventh;
-  dhtt.humidity().getEvent(&eventh);
-  if (isnan(eventh.relative_humidity)) {
-    Vypis("Chyba cteni vlhkosti z DHT22!");
-  }
-  Vypiss("Data z DHT22: ");
-  Vypiss("Teplota: ");
-   if (topeni < eventt.temperature)
+  //sensors_event_t eventh;
+  //dhtt.humidity().getEvent(&eventh);
+  //if (isnan(eventh.relative_humidity)) {
+  //  Serial.println("Error reading humidity from DHT22!");
+  //}
+  Serial.print("DHT22 sensor: ");
+  Serial.print("Temperature: ");
+  if (topeni < t)
   {
-    topeni = eventt.temperature;
+    topeni = t;
   }
-  Vypiss(String(eventt.temperature));
-  temp = eventt.temperature;
-  Vypiss(" °C, Vlhkost: ");
-  Vypiss(String(eventh.relative_humidity));
-  Vypiss(" %");
+  Serial.print(String(t));
+  temp = t;
+  Serial.print(" °C, Humidity: ");
+  Serial.print(String(h));
+  humidity = h;
+  Serial.println(" %");
+  delay(170);
+  Serial.print("t5=");
+  Serial.println(String(t));
+  delay(170);
+  Serial.print("v1=");
+  Serial.println(String(h));
+  delay(170);
 }
 
-void printTemperature(DeviceAddress deviceAddress, float correction)
+float myTemperature(DeviceAddress deviceAddress, float correction)
 {
-
   float tempC = sensors.getTempC(deviceAddress);
-
   tempC = tempC + correction;
-  
-  if (topeni < tempC)
-  {
+  if (topeni < tempC)  {
     topeni = tempC;
   }
-
-  if (tempC == -127.00)
-  {
-    Serial.print("Error getting temperature  ");
+  if (mintemp < tempC) {
+    mintemp = tempC;
   }
-  else
-  {
-    Serial.print("C: ");
-    Serial.print(tempC);
-    //Serial.print(" F: ");
-    //Serial.print(DallasTemperature::toFahrenheit(tempC));
+  if (tempC == -127.00) {
+    return (-200);
+  }
+  else {
+    return (tempC);
   }
 }
 
 void loop() {
   if (WiFi.status() == WL_CONNECTED) {
     ArduinoOTA.handle();
-    BlueToothHandle();
   }
   //LOOP-BLOCK-1s-LOOP-BLOCK-1s-LOOP-BLOCK-1s-LOOP-BLOCK-1s-LOOP-BLOCK-1s-LOOP-BLOCK-1s-LOOP-BLOCK-1s-LOOP-BLOCK-1s-LOOP-BLOCK-1s-LOOP-BLOCK-1s-LOOP-BLOCK-1s-LOOP-BLOCK-1s
   if (millis() > (1000 + lastJob1s))
   {
     // kód vykonaný každou 1 vteřinu (1000 ms)
-
 
     lastJob1s = millis();
   }
@@ -412,34 +357,96 @@ void loop() {
     // kód vykonaný každých 5 vteřin (5000 ms)
 
     topeni = -30;
+    mintemp = -100;
+    record = ""; //record to be stored to SD
+
+    readDS3231time(&tsec, &tmin, &thour, &tdayOfWeek, &tdayOfMonth, &tmonth, &tyear);
+
+    record = String(tdayOfMonth, DEC);
+    record = record + ".";
+    record = record + String(tdayOfMonth, DEC);
+    record = record + ".";
+    record = record + String(tyear, DEC);
+    record = record + ";";
+
+    if (thour < 10) {
+      record = record + "0";
+    }
+    record = record + String(thour, DEC);
+    record = record + ":";
+    if (tmin < 10) {
+      record = record + "0";
+    }
+    record = record + String(tmin, DEC);
+    record = record + ":";
+    if (tsec < 10) {
+      record = record + "0";
+    }
+    record = record + String(tsec, DEC);
+    record = record + ";";
+
 
     zjistiDHT22();
     sensors.requestTemperatures();
 
     Serial.print("Probe 01 temperature is:   ");
-    printTemperature(Probe01, Correction1);
-    Serial.println();
+    Serial.print(myTemperature(Probe01, Correction1));
+    Serial.println("°C");
+    delay(170);
+    Serial.print("t1=");
+    Serial.println(myTemperature(Probe01, Correction1));
+    delay(180);
+    record = record + String(myTemperature(Probe01, Correction1));
+    record = record + ";";
 
     Serial.print("Probe 02 temperature is:   ");
-    printTemperature(Probe02, Correction2);
-    Serial.println();
+    Serial.print(myTemperature(Probe02, Correction2));
+    Serial.println("°C");
+    delay(170);
+    Serial.print("t2=");
+    Serial.println(myTemperature(Probe02, Correction2));
+    delay(170);
+    record = record + String(myTemperature(Probe02, Correction2));
+    record = record + ";";
 
     Serial.print("Probe 03 temperature is:   ");
-    printTemperature(Probe03, Correction3);
-    Serial.println();
+    Serial.print(myTemperature(Probe03, Correction3));
+    Serial.println("°C");
+    delay(170);
+    Serial.print("t3=");
+    Serial.println(myTemperature(Probe03, Correction3));
+    delay(170);
+    record = record + String(myTemperature(Probe03, Correction3));
+    record = record + ";";
 
     Serial.print("Probe 04 temperature is:   ");
-    printTemperature(Probe04, Correction4);
-    Serial.println();
+    Serial.print(myTemperature(Probe04, Correction4));
+    Serial.println("°C");
+    delay(170);
+    Serial.print("t4=");
+    Serial.println(myTemperature(Probe04, Correction4));
+    delay(170);
+    record = record + String(myTemperature(Probe04, Correction4));
+    record = record + ";";
 
-    if (topeni < maxtemp) {
+    record = record + String(temp);
+    record = record + ";";
+    record = record + String(humidity);
+    record = record + ";";
+
+
+    if (topeni < maxtemp && mintemp > -30) {
       digitalWrite(relePIN, HIGH);
-      Vypis(" - Topim");
+      Serial.println("Heating");
+      record = record + "Y";
     }
     else {
       digitalWrite(relePIN, LOW);
-      Vypis(" - Netopim");
+      Serial.println("Monitoring");
+      record = record + "N";
     }
+
+    //Serial.println(record);
 
     lastJob5s = millis();
   }
@@ -449,7 +456,25 @@ void loop() {
   {
     // kód vykonaný každých 30 vteřin (30000 ms)
     //AktualizujRTC();
+    Serial.println("-------------------------------------");
     displayTime();
+    Serial.println("-------------------------------------");
+
+    // open the file. note that only one file can be open at a time,
+    // so you have to close this one before opening another.
+    myFile = SD.open("itrubec.csv", FILE_WRITE);
+
+    // if the file opened okay, write to it:
+    if (myFile) {
+      Serial.print("Writing log itrubec.csv on SD card... ");
+      myFile.println(record);
+      // close the file:
+      myFile.close();
+      Serial.println("Done OK.");
+    } else {
+      // if the file didn't open, print an error:
+      Serial.println("Error opening itrubec.csv");
+    }
 
     lastJob30s = millis();
   }
@@ -463,8 +488,9 @@ void loop() {
       ZkusPripojitWifi();
       AktualizujRTC();
     } else {
-      Vypiss("Pripojeno k WiFi na IP adrese: ");
-      Vypis(WiFi.localIP().toString());
+      Serial.print("Pripojeno k WiFi na IP adrese: ");
+      Serial.println(WiFi.localIP().toString());
+      AktualizujRTC();
     }
 
     lastJob1min = millis();
