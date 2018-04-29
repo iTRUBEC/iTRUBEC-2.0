@@ -48,6 +48,7 @@ NTPClient timeClient(ntpUDP, "europe.pool.ntp.org", 3600, 60000);
   VCC 5 V     bila    VCC 5 V
   D0 RX       fialova TXD
   D1 TX       modra   RXD
+  D0 & D1 must be disconnected when uploading this code to the board!
 */
 
 
@@ -65,7 +66,7 @@ DHT dht(DHTtPIN, DHTtTYPE);
 //DHT_Unified dhtt(DHTtPIN, DHTtTYPE);
 
 //Nastavení teplotních čidel DS18B20
-#define ONE_WIRE_BUS_PIN D8 // onewire pro čidla na D5
+#define ONE_WIRE_BUS_PIN D8 // onewire pro čidla na D8
 OneWire oneWire(ONE_WIRE_BUS_PIN);
 DallasTemperature sensors(&oneWire);
 DeviceAddress Probe01 = { 0x28, 0xFF, 0x13, 0x43, 0xC4, 0x17, 0x04, 0x3C };
