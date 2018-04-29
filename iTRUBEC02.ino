@@ -1,5 +1,5 @@
 long lastJob1s = 0, lastJob5s = 0, lastJob30s = 0, lastJob1min = 0;
-float maxtemp = 49, temp = 0, mintemp = 0, humidity = 0;
+float maxtemp = 51, temp = 0, mintemp = 0, humidity = 0;
 String record = "";
 byte tsec, tmin, thour, tdayOfWeek, tdayOfMonth, tmonth, tyear;
 
@@ -364,7 +364,7 @@ void loop() {
 
     record = String(tdayOfMonth, DEC);
     record = record + ".";
-    record = record + String(tdayOfMonth, DEC);
+    record = record + String(tmonth, DEC);
     record = record + ".";
     record = record + String(tyear, DEC);
     record = record + ";";
